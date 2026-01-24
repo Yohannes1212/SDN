@@ -69,6 +69,8 @@ Parameters:
 - `--sample-period`: Data resampling period (default: "0.2S")
 
 ## Implementation Details
+<img width="6537" height="410" alt="image" src="https://github.com/user-attachments/assets/5526372b-26a1-4461-a97f-ffd88a78c550" />
+
 
 ### Network Topology Generation
 - Creates a random network with configurable number of switches and hosts
