@@ -33,6 +33,7 @@ ryu-manager ryu.app.simple_switch_stp
 ## Usage
 
 ### 1. Generate Network Topology and Traffic
+<img width="2400" height="1800" alt="topology_image" src="https://github.com/user-attachments/assets/5b034f2a-b31f-4175-9217-3976df58b1a6" />
 
 Run the following command to create a random network topology and generate traffic:
 
