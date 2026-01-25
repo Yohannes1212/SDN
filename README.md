@@ -70,7 +70,6 @@ Parameters:
 - `--sample-period`: Data resampling period (default: "0.2S")
 
 ## Implementation Details
-<img width="6537" height="410" alt="image" src="https://github.com/user-attachments/assets/5526372b-26a1-4461-a97f-ffd88a78c550" />
 <img width="6877" height="305" alt="image" src="https://github.com/user-attachments/assets/9c8a3905-5362-47a5-a22e-8aadb8c8bf59" />
 
 
