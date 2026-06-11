@@ -39,6 +39,6 @@ if __name__ == "__main__":
             shell=True
         ).wait()
 
-        # OFF phase — complete silence so ARIMA can learn the ON/OFF rhythm
+        # OFF phase complete silence so ARIMA can learn the ON/OFF rhythm
         print(f"[traffic_gen] OFF → {host_ip} | {OFF_DURATION}s silence")
         time.sleep(OFF_DURATION)
