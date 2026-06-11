@@ -1,165 +1,153 @@
-#mininet libraries
+#!/usr/bin/env python3
+"""
+main.py — SDN Traffic Prediction experiment
+
+Builds a Mininet topology, generates structured traffic, captures
+every packet per switch interface into CSV files, then exits cleanly.
+
+Usage:
+    sudo python3 main.py [--switches N] [--hosts N] [--cross-connection P]
+                         [--time T] [--base-flows B] [--flows F]
+"""
+
 from mininet.topo import Topo
 from mininet.net import Mininet
-from mininet.node import OVSKernelSwitch, RemoteController
-from mininet.cli import CLI
+from mininet.node import OVSKernelSwitch
 from mininet.link import TCLink
-from mininet.log import setLogLevel, info
+from mininet.log import setLogLevel
 
-
-#installed libraries
 import networkx as nx
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
 from scapy.all import AsyncSniffer
 
-#default libraries
-import time
-import random
-import os
-import re
+import argparse
 import csv
 import math
-import argparse
+import os
+import random
+import re
+import time
 
-#Simulation parameters
-folder_captures = "captures" 
 
-#Connection parameters
-HOST_LINK_MAX_BW = 2
-HOST_LINK_MIN_BW = 1
+CAPTURES_FOLDER    = "captures"
+HOST_LINK_MAX_BW   = 2
+HOST_LINK_MIN_BW   = 1
 SWITCH_LINK_MAX_BW = 2
 SWITCH_LINK_MIN_BW = 1
 
 
 class Topology(Topo):
-    def __init__(self, num_switches, num_hosts, interconnectivity, seed = 0):
-            super().__init__()
-            self.num_switches = num_switches
-            self.num_hosts = num_hosts
-            self.interconnectivity = interconnectivity
-            self.seed = seed
-            
-            random.seed(self.seed)
-            host_count = 1 
-            #create all the switces and hosts
-            for i in range(self.num_switches):
-                switch_dpid = f"s{i+1}"
-                self.addSwitch(switch_dpid, stp=True, failMode='standalone')    #stp to avoid loops in the networks 
 
-                if i > 0:
-                    self.addLink(switch_dpid, f"s{i}", bw = random.random()*(SWITCH_LINK_MAX_BW-SWITCH_LINK_MIN_BW) + SWITCH_LINK_MIN_BW )      #add link to previous switch in a line topology
+    def __init__(self, num_switches, num_hosts, interconnectivity, seed=0):
+        super().__init__()
+        self.num_switches      = num_switches
+        self.num_hosts         = num_hosts
+        self.interconnectivity = interconnectivity
+        self.seed              = seed
 
-                #for each switch create and connect all the hosts
-                
-                for j in range(self.num_hosts):
-                    host_dpid = f"h{host_count}"
-                    self.addHost(host_dpid)
-                    self.addLink(switch_dpid, host_dpid, bw = random.random()*(HOST_LINK_MAX_BW-HOST_LINK_MIN_BW) + HOST_LINK_MIN_BW)
-                    host_count += 1
+        random.seed(self.seed)
+        host_count = 1
 
-            # add connections between switches
-            connected_pairs = set()
-            for i in range(1, self.num_switches + 1):
-                for j in range(1, self.num_switches + 1):
-                    # do not link with yourself 
-                    if i == j:
-                        continue
-                    # already linked with previous router 
-                    if i == j + 1 or i == j - 1:
-                        continue
-                    # check if the reverse connection already exists
-                    if (j, i) in connected_pairs:
-                        continue
+        for i in range(self.num_switches):
+            sw = f"s{i + 1}"
+            self.addSwitch(sw, stp=True, failMode='standalone')
 
-                    if random.random() < self.interconnectivity:
-                        connected_pairs.add((i, j))  # Add the connected pair to the set
-                        self.addLink(f"s{i}", f"s{j}", bw = random.random()*(SWITCH_LINK_MAX_BW-SWITCH_LINK_MIN_BW) + SWITCH_LINK_MIN_BW )
-  
-    def saving_topology(self):
-        import matplotlib.image as mpimg
+            if i > 0:
+                bw = random.uniform(SWITCH_LINK_MIN_BW, SWITCH_LINK_MAX_BW)
+                self.addLink(sw, f"s{i}", bw=bw)
 
+            for _ in range(self.num_hosts):
+                host = f"h{host_count}"
+                self.addHost(host)
+                bw = random.uniform(HOST_LINK_MIN_BW, HOST_LINK_MAX_BW)
+                self.addLink(sw, host, bw=bw)
+                host_count += 1
+
+        # cross-links between non-adjacent switches
+        connected_pairs = set()
+        for i in range(1, self.num_switches + 1):
+            for j in range(1, self.num_switches + 1):
+                if i == j or abs(i - j) == 1:
+                    continue
+                if (j, i) in connected_pairs:
+                    continue
+                if random.random() < self.interconnectivity:
+                    connected_pairs.add((i, j))
+                    bw = random.uniform(SWITCH_LINK_MIN_BW, SWITCH_LINK_MAX_BW)
+                    self.addLink(f"s{i}", f"s{j}", bw=bw)
+
+    def save_topology_image(self, path="topology_image.png"):
         G = nx.Graph()
-        image_file = "topology_image.png"
-
-        # --- Define Professional Colors ---
-        switch_label_color = '#003366'  # A dark, professional blue
-        host_label_color = '#006400'    # A dark green
-        edge_color = '#555555'        # A dark gray
-
-        # Try to load icon images. Handle error if they don't exist.
-        try:
-            switch_icon = mpimg.imread('switch_icon.png')
-            host_icon = mpimg.imread('host_icon.png')
-            icons_loaded = True
-        except FileNotFoundError:
-            print("\n*** Icon files not found. Drawing default circles instead.")
-            icons_loaded = False
-
         for node in self.nodes():
-            if node.startswith('s'):
-                G.add_node(node, node_type='switch')
-            else:
-                G.add_node(node, node_type='host')
+            G.add_node(node,
+                node_type='switch' if node.startswith('s') else 'host')
+        for u, v in self.links():
+            G.add_edge(u, v)
 
-        for link in self.links():
-            G.add_edge(link[0], link[1])
+        switch_nodes = [n for n, d in G.nodes(data=True)
+                        if d['node_type'] == 'switch']
+        host_nodes   = [n for n, d in G.nodes(data=True)
+                        if d['node_type'] == 'host']
 
-        pos = nx.spring_layout(G, seed=42, k=1/math.sqrt(len(G.nodes())), iterations=100)
+        pos       = nx.spring_layout(G, seed=42,
+                                     k=1 / math.sqrt(max(len(G), 1)),
+                                     iterations=100)
+        label_pos = {k: (v[0], v[1] + 0.09) for k, v in pos.items()}
 
         plt.figure(figsize=(8, 6))
         ax = plt.gca()
-        
-        # Draw edges with the new color
-        nx.draw_networkx_edges(G, pos, ax=ax, alpha=0.8, width=1.5, edge_color=edge_color)
-        
-        # Create a new position dictionary for labels, slightly offset vertically
-        label_pos = {k: (v[0], v[1] + 0.09) for k, v in pos.items()}
 
-        # --- FIX: Create separate label dictionaries ---
-        switch_nodes = [n for n, d in G.nodes(data=True) if d['node_type'] == 'switch']
-        host_nodes = [n for n, d in G.nodes(data=True) if d['node_type'] == 'host']
+        nx.draw_networkx_edges(G, pos, ax=ax, alpha=0.8,
+                               width=1.5, edge_color='#555555')
+        nx.draw_networkx_labels(G, label_pos,
+                                labels={n: n for n in switch_nodes},
+                                ax=ax, font_size=12,
+                                font_color='#003366', font_weight='bold')
+        nx.draw_networkx_labels(G, label_pos,
+                                labels={n: n for n in host_nodes},
+                                ax=ax, font_size=12,
+                                font_color='#006400', font_weight='bold')
 
-        switch_labels = {node: node for node in switch_nodes}
-        host_labels = {node: node for node in host_nodes}
-
-        # --- FIX: Call the function with the 'labels' argument ---
-        nx.draw_networkx_labels(G, label_pos, labels=switch_labels, ax=ax, font_size=12, font_color=switch_label_color, font_weight='bold')
-        nx.draw_networkx_labels(G, label_pos, labels=host_labels, ax=ax, font_size=12, font_color=host_label_color, font_weight='bold')
-
-        if not icons_loaded:
-            # Fallback to simple circles if icons are missing
-            nx.draw_networkx_nodes(G, pos, nodelist=switch_nodes, node_color='red', node_size=500)
-            nx.draw_networkx_nodes(G, pos, nodelist=host_nodes, node_color='orange', node_size=300)
-        else:
-            # If icons are loaded, draw them instead of nodes
-            ax.set_xlim(ax.get_xlim())
-            ax.set_ylim(ax.get_ylim())
-
+        try:
+            sw_icon   = mpimg.imread('switch_icon.png')
+            host_icon = mpimg.imread('host_icon.png')
             for node, (x, y) in pos.items():
-                node_type = G.nodes[node]['node_type']
-                icon = switch_icon if node_type == 'switch' else host_icon
-                
-                icon_size = 0.15
-                ax.imshow(icon, extent=(x - icon_size / 2, x + icon_size / 2, y - icon_size / 2, y + icon_size / 2), aspect='equal', zorder=5)
-        
-        # Clean up the plot appearance
+                icon = (sw_icon if G.nodes[node]['node_type'] == 'switch'
+                        else host_icon)
+                s = 0.15
+                ax.imshow(icon,
+                          extent=(x-s/2, x+s/2, y-s/2, y+s/2),
+                          aspect='equal', zorder=5)
+        except FileNotFoundError:
+            nx.draw_networkx_nodes(G, pos, nodelist=switch_nodes,
+                                   node_color='red',    node_size=500)
+            nx.draw_networkx_nodes(G, pos, nodelist=host_nodes,
+                                   node_color='orange', node_size=300)
+
         plt.title("Network Topology", fontsize=16)
         ax.margins(0.1, 0.1)
-        ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+        ax.tick_params(left=False, bottom=False,
+                       labelleft=False, labelbottom=False)
         plt.box(False)
-
-        plt.savefig(image_file, dpi=300)
+        plt.savefig(path, dpi=300)
         plt.close()
-        print(f"\n*** Topology saved as '{image_file}'")
+        print(f"\n*** Topology image saved → '{path}'")
+
+
 class NetworkManager:
-    def __init__(self): 
-        self.net = None
+
+    def __init__(self):
+        self.net      = None
+        self.sniffers = []
 
     def create_net(self, topology):
-        self.net = Mininet(                                                
+        self.net = Mininet(
             topo=topology,
             switch=OVSKernelSwitch,
-            build=False, # we build later after adding controller
+            build=False,
             autoSetMacs=True,
             autoStaticArp=True,
             link=TCLink
@@ -167,125 +155,147 @@ class NetworkManager:
         return self.net
 
     def check_stp_configuration(self):
-        s1 = self.net.get("s1")   #check he state stp, we wait until s1 says "forward" which indicates it is complete
-        while(s1.cmdPrint('ovs-ofctl show s1 | grep -o FORWARD | head -n1') != "FORWARD\r\n"): 
-            time.sleep(3)
+        # STP takes ~30s to elect a root and move ports to FORWARD.
+        # We poll every switch — not just s1 — to be sure all are ready.
+        print("\n*** Waiting for STP to converge on all switches...")
+        for switch in self.net.switches:
+            name = switch.name
+            print(f"    Checking {name}...", end='', flush=True)
+            while True:
+                out = switch.cmdPrint(
+                    f'ovs-ofctl show {name} | grep -o FORWARD | head -n1'
+                )
+                if 'FORWARD' in out:
+                    print(" ready")
+                    break
+                time.sleep(3)
 
-    def start_servers(self, base_flows, flows_per_host):    
-        random.seed(time.time()) #reset random seed
-        for h in self.net.hosts:
-            h.cmd('iperf -s -p 5050 &') #start iperf -Server on TCP -Port 5050  this 
+    def start_servers(self, base_flows, flows_per_host):
+        random.seed(time.time())
 
-        for h in random.sample(self.net.hosts, base_flows):
-            hosts = self.net.hosts.copy()
-            hosts.remove(h)  #do not pick yourself
-            host = random.choice(hosts)
-            h.cmd(f"iperf -t 0 -c {host.IP()} -p 5050 &")  #start iperf client
-            print(f"Continuous flow started from {h.name} to {host.name}")
-            
         for h in self.net.hosts:
-            hosts = self.net.hosts.copy()
-            hosts.remove(h)  #do not pick yourself
-            for host in random.sample(hosts, flows_per_host):
-                h.cmd(f"python3 utils/traffic_generation.py {host.IP()} &")
-                print(f"Periodic flow started from {h.name} to {host.name}")
-    
-    def create_captures_folder(self): 
-        os.system(f"rm -rf {folder_captures}")    #delete the folder contents before starting
-        os.mkdir(folder_captures) 
-        for s in self.net.switches:
-            os.mkdir(os.path.join(folder_captures, s.name))
+            h.cmd('iperf -s -p 5050 &')
+
+        # continuous flows — always-on background load
+        safe_base = min(base_flows, len(self.net.hosts))
+        if safe_base < base_flows:
+            print(f"[WARN] base_flows clamped {base_flows}→{safe_base}")
+        for h in random.sample(self.net.hosts, safe_base):
+            others = [x for x in self.net.hosts if x != h]
+            target = random.choice(others)
+            h.cmd(f"iperf -t 0 -c {target.IP()} -p 5050 &")
+            print(f"    Continuous flow: {h.name} → {target.name}")
+
+        # periodic ON/OFF flows — the structured signal ARIMA learns from
+        for h in self.net.hosts:
+            others     = [x for x in self.net.hosts if x != h]
+            safe_flows = min(flows_per_host, len(others))
+            if safe_flows < flows_per_host:
+                print(f"[WARN] flows_per_host clamped {flows_per_host}→{safe_flows} "
+                      f"for {h.name}")
+            for target in random.sample(others, safe_flows):
+                h.cmd(f"python3 utils/traffic_generation.py {target.IP()} &")
+                print(f"    Periodic flow:   {h.name} → {target.name}")
+
+    def create_captures_folder(self):
+        os.system(f"rm -rf {CAPTURES_FOLDER}")
+        os.mkdir(CAPTURES_FOLDER)
+        for sw in self.net.switches:
+            os.mkdir(os.path.join(CAPTURES_FOLDER, sw.name))
 
     def start_traffic_capture(self):
-        interface_pattern = re.compile(r's\d+-eth\d+') #find mn interfaces (s1-eth1) etc
-        interfaces = [i for i in os.listdir('/sys/class/net/') if interface_pattern.match(i)]  
-        if len(interfaces)==0:
-            print(f"ERROR: could not find any mininet network adapters for some reason, quitting")
-            exit(1)
-        
-        def start_sniffer(iface, path):
-            csvfile = open(path+'.csv', 'w', newline='')
-            writer = csv.writer(csvfile,)
-            print (f" Beginning capture on {i}")
-            
+        iface_re   = re.compile(r's\d+-eth\d+')
+        interfaces = [i for i in os.listdir('/sys/class/net/')
+                      if iface_re.match(i)]
+
+        if not interfaces:
+            raise RuntimeError("No Mininet interfaces found — did the network start?")
+
+        for iface in interfaces:
+            parts   = iface.split('-')
+            path    = os.path.join(CAPTURES_FOLDER, *parts)
+            csvfile = open(path + '.csv', 'w', newline='')
+            writer  = csv.writer(csvfile)
             writer.writerow(['ds', 'y'])
-            
-            def handler(pkt):
-                writer.writerow([pkt.time, len(pkt)])
-                
-            sniffer = AsyncSniffer(iface=iface, store=False, prn=handler)
+
+            # factory avoids the classic loop-closure bug
+            def make_handler(w):
+                def handler(pkt):
+                    w.writerow([pkt.time, len(pkt)])
+                return handler
+
+            sniffer = AsyncSniffer(
+                iface=iface,
+                store=False,
+                prn=make_handler(writer)
+            )
             sniffer.start()
-            return sniffer, csvfile
-            
-        self.sniffers = []
-        
-        for i in interfaces:
-            # by splitting the interface name we separate the switch from the port and therefore assign the correct folder
-            path = os.path.join(folder_captures, *i.split('-'))
-            self.sniffers.append(start_sniffer(i, path))
-    
-        
+            print(f"    Capturing on {iface}")
+            self.sniffers.append((sniffer, csvfile))
+
     def stop_traffic_capture(self):
         for sniffer, csvfile in self.sniffers:
             sniffer.stop()
             csvfile.close()
+        self.sniffers.clear()
+
 
 if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser(description="Network Testing Script")
-    parser.add_argument('--switches', type=int, default=7, help="Number of switches")
-    parser.add_argument('--hosts', type=int, default=2, help="Number of hosts per switch")
-    parser.add_argument('--cross-connection', type=float, default=0.30, help="Percentage of cross-connections between non-adjacent switches")
-    parser.add_argument('--time', type=int, default=30, help="Duration of the test in seconds")
-    parser.add_argument('--base-flows', type=int, default=3, help="Number of constant iperf flows")
-    parser.add_argument('--flows', type=int, default=1, help="Number of periodic flows per host")
+    parser = argparse.ArgumentParser(
+        description="SDN Traffic Prediction — data collection"
+    )
+    parser.add_argument('--switches',         type=int,   default=2)
+    parser.add_argument('--hosts',            type=int,   default=2)
+    parser.add_argument('--cross-connection', type=float, default=0.30)
+    parser.add_argument('--time',             type=int,   default=120)
+    parser.add_argument('--base-flows',       type=int,   default=2)
+    parser.add_argument('--flows',            type=int,   default=2)
     args = parser.parse_args()
 
-    #Arguments
-    SWITCHES = args.switches
-    HOSTS_PER_SWITCH = args.hosts
-    CROSS_CONNECTION = args.cross_connection
-    TEST_TIME = args.time 
-    NUM_IPERF_FLOWS = args.base_flows
-    FLOWS_PER_HOST = args.flows
-    
-    network = NetworkManager()
-    
-    print('*** Clean network instances\n')
-    os.system("mn -c")
+    print('*** Cleaning previous Mininet state...')
+    os.system("mn -c 2>/dev/null")
 
-    topology = Topology(SWITCHES, HOSTS_PER_SWITCH, CROSS_CONNECTION, 0)
-    topology.saving_topology()
+    topology = Topology(
+        num_switches=args.switches,
+        num_hosts=args.hosts,
+        interconnectivity=args.cross_connection,
+        seed=0
+    )
+    topology.save_topology_image()
 
     setLogLevel('info')
-    net = network.create_net(topology)
-    
-    net.build() # build the network after adding the controller
+
+    network = NetworkManager()
+    net     = network.create_net(topology)
+    net.build()
     net.start()
     time.sleep(1)
-    
-    print("\n*** Network built, waiting for STP to configure itself")    
+
     network.check_stp_configuration()
-    
-    print("\n*** STP ok, waiting 5 seconds...")
+    print("\n*** STP converged. Waiting 5s for tables to settle...")
     time.sleep(5)
-    
-    print("\n*** Testing ping connectivity...")    
+
+    print("\n*** Testing connectivity...")
     net.pingAll()
     time.sleep(1)
-    # CLI(net)
 
-    print("\n*** Begin traffic generation\n")    
-    network.start_servers(NUM_IPERF_FLOWS,FLOWS_PER_HOST)
+    print("\n*** Starting traffic generators...")
+    network.start_servers(args.base_flows, args.flows)
     time.sleep(2)
-        
-    print("\n*** Begin traffic capturing\n\n")    
+
+    print("\n*** Starting packet capture...")
     network.create_captures_folder()
     network.start_traffic_capture()
 
-    print(f"\n*** Waiting for test time ({TEST_TIME} seconds)")
-    time.sleep(TEST_TIME)
+    print(f"\n*** Experiment running for {args.time}s — do not interrupt...")
 
-    print("\n*** Stopping traffic capture...")
-    network.stop_traffic_capture()
-    net.stop()
+    # try/finally guarantees teardown even if something crashes mid-experiment
+    try:
+        time.sleep(args.time)
+    finally:
+        print("\n*** Stopping capture and tearing down network...")
+        network.stop_traffic_capture()
+        net.stop()
+
+    print(f"\n*** Done. CSV files are in: {CAPTURES_FOLDER}")
+    print(f"    Run: python3 traffic_prediction.py --csv {CAPTURES_FOLDER}")
