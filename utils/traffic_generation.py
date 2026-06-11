@@ -1,26 +1,44 @@
 import sys
 import os
-import subprocess 
+import subprocess
 import random
 import time
+import signal
 
-MAX_RANDOM_FLOW_BW = .5
-MAX_RANDOM_FLOW_DURATION = 2
-MAX_IDLE_TIME = 2
+ON_DURATION  = 5.0   # seconds — how long each active burst lasts
+OFF_DURATION = 1.0   # seconds — silence between bursts
+MIN_FLOW_BW  = 0.2   # Mbps — minimum bandwidth during ON phase
+MAX_FLOW_BW  = 1.0   # Mbps — maximum bandwidth during ON phase
+
+def graceful_exit(signum, frame):
+    """Allow Mininet to kill this process cleanly via SIGTERM(termination signal)."""
+    sys.exit(0)
 
 if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: traffic_generation.py <host_ip>")
+        sys.exit(1)
+
+    # Read host_ip ONCE before the loop — not on every iteration
     host_ip = sys.argv[1]
-    # random.random() → gives a number between 0 and 1
-    # So duration ∈ [0, 2], 
-    # bandwidth ∈ [0, 0.5] Mbps,
-    # idle ∈ [0, 2]
-    duration = random.random()*MAX_RANDOM_FLOW_DURATION
-    bw = random.random()*MAX_RANDOM_FLOW_BW
-    idle_time = random.random()*MAX_IDLE_TIME
-    cmd = f'iperf -t {duration} -c {host_ip} -b {bw}M -p 5050'
-    # starts an iperfclient to the given host with the random bandwidth 
-    # and duration waits for it to finish, 
-    # then sleeps for some random time before starting again. This creates periodic, bursty, random traffic. 
+
+    # Handle SIGTERM so Mininet can shut down cleanly
+    signal.signal(signal.SIGTERM, graceful_exit)
+
+    print(f"[traffic_gen] Starting intermittent traffic to {host_ip}")
+    print(f"[traffic_gen] Pattern: ON={ON_DURATION}s / OFF={OFF_DURATION}s")
+
     while True:
-        subprocess.Popen( cmd, shell=True).wait()
-        time.sleep(idle_time)
+        # ON phase — send traffic for ON_DURATION seconds
+        # BW varies each cycle so the signal is not a flat square wave
+        bw = MIN_FLOW_BW + random.random() * (MAX_FLOW_BW - MIN_FLOW_BW)
+
+        print(f"[traffic_gen] ON  → {host_ip} | {ON_DURATION}s @ {bw:.3f}Mbps")
+        subprocess.Popen(
+            f"iperf -t {ON_DURATION:.1f} -c {host_ip} -b {bw:.3f}M -p 5050",
+            shell=True
+        ).wait()
+
+        # OFF phase — complete silence so ARIMA can learn the ON/OFF rhythm
+        print(f"[traffic_gen] OFF → {host_ip} | {OFF_DURATION}s silence")
+        time.sleep(OFF_DURATION)
