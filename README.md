@@ -99,8 +99,8 @@ pip install prophet --break-system-packages
 Clone the repository:
 
 ```bash
-git clone https://github.com/YohannesZewodie/SDN-Traffic-Prediction
-cd SDN-Traffic-Prediction
+git clone https://github.com/YohannesZewodie/sdn-traffic-prediction
+cd sdn-traffic-prediction
 ```
 
 ---
